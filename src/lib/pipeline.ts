@@ -1,7 +1,8 @@
 import { store, AnalysisState } from './store';
 import { scrapeWebsite } from './scraper';
 import { analyzeBrand, generateAdInsights, generateAdCopies, generateCompetitorAdData } from './claude';
-import { generateAllCompetitorImages, generateBrandCreatives } from './openai';
+import { generateBrandCreatives } from './openai';
+import { fetchAllCompetitorAds } from './adlibrary';
 
 function updateState(id: string, updates: Partial<AnalysisState>) {
   const current = store.get(id);
@@ -10,7 +11,7 @@ function updateState(id: string, updates: Partial<AnalysisState>) {
 
 export async function runPipeline(id: string, url: string) {
   try {
-    // Step 1: Scrape website — extract colors, fonts, logo, product images
+    // Step 1: Scrape website
     updateState(id, { status: 'scraping', step: 1, stepLabel: 'Analisando site e extraindo elementos visuais...' });
     const scraped = await scrapeWebsite(url);
 
@@ -30,30 +31,26 @@ export async function runPipeline(id: string, url: string) {
     };
     updateState(id, { brandbook, competitorNames: brandAnalysis.competitors });
 
-    // Step 3: Claude generates competitor ad data + insights in parallel
-    updateState(id, { status: 'competitors', step: 3, stepLabel: 'Analisando anúncios de maior longevidade dos concorrentes...' });
-    const [adInsights, competitorAdData] = await Promise.all([
+    // Step 3: Fetch real ads from Meta Ad Library + get insights
+    updateState(id, { status: 'competitors', step: 3, stepLabel: 'Buscando anúncios reais na biblioteca do Facebook...' });
+    const fbToken = process.env.FACEBOOK_ACCESS_TOKEN || '';
+    const [adInsights, realAds] = await Promise.all([
       generateAdInsights(brandAnalysis.niche, brandAnalysis.competitors),
-      generateCompetitorAdData(brandAnalysis.niche, brandAnalysis.competitors),
+      fbToken
+        ? fetchAllCompetitorAds(brandAnalysis.competitors, fbToken)
+        : Promise.resolve([]),
     ]);
-    updateState(id, { adInsights });
 
-    // Step 4: Generate DALL-E images for competitor ads
-    updateState(id, { status: 'ads', step: 4, stepLabel: `Gerando imagens para ${competitorAdData.length} anúncios dos concorrentes...` });
-    const competitorImageUrls = await generateAllCompetitorImages(
-      competitorAdData.map((ad) => ({ pageName: ad.pageName, body: ad.body, visualStyle: ad.visualStyle })),
-      brandAnalysis.niche
-    );
-    const competitorAds = competitorAdData.map((ad, i) => ({
-      pageName: ad.pageName,
-      headline: ad.headline,
-      body: ad.body,
-      cta: ad.cta,
-      daysRunning: ad.daysRunning,
-      adLibraryUrl: ad.adLibraryUrl,
-      imageUrl: competitorImageUrls[i] || '',
-    }));
-    updateState(id, { competitorAds });
+    let competitorAds = realAds;
+
+    // Fallback: Claude generates ad data (no images) if no token or API returned nothing
+    if (competitorAds.length === 0) {
+      updateState(id, { status: 'ads', step: 4, stepLabel: 'Gerando dados dos anúncios dos concorrentes com Claude...' });
+      const fallbackData = await generateCompetitorAdData(brandAnalysis.niche, brandAnalysis.competitors);
+      competitorAds = fallbackData.map((ad) => ({ ...ad, imageUrl: '' }));
+    }
+
+    updateState(id, { adInsights, competitorAds });
 
     // Step 5: Claude generates 10 ad copies with specific visual prompts
     updateState(id, { status: 'generating', step: 5, stepLabel: 'Gerando 10 variações de copy baseadas nos concorrentes...' });

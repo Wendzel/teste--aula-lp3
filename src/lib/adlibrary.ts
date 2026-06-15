@@ -1,93 +1,126 @@
 import axios from 'axios';
 import type { CompetitorAd } from './store';
 
-interface FbAdSnapshot {
+interface MetaAdCreative {
+  body?: string;
   title?: string;
-  body?: { markup?: { __html?: string } };
-  cards?: Array<{ title?: string; body?: string; resized_image_url?: string }>;
-  images?: Array<{ resized_image_url?: string; original_image_url?: string }>;
-  videos?: Array<{ video_preview_image_url?: string }>;
-  cta_text?: string;
+  image_url?: string;
+  video_preview_image_url?: string;
 }
 
-interface FbAdResult {
-  adid?: string;
-  page_name?: string;
-  snapshot?: FbAdSnapshot;
-  start_date?: number;
+interface MetaAd {
+  id: string;
+  page_name: string;
+  ad_creative_bodies?: string[];
+  ad_creative_link_titles?: string[];
+  ad_creative_link_captions?: string[];
+  ad_snapshot_url?: string;
   ad_delivery_start_time?: string;
+  ad_creative_images?: MetaAdCreative[];
+  impressions?: { lower_bound: string; upper_bound: string };
 }
 
-function daysRunning(startDate: number | undefined): number {
-  if (!startDate) return Math.floor(Math.random() * 60) + 10;
-  return Math.floor((Date.now() / 1000 - startDate) / 86400);
+interface MetaApiResponse {
+  data?: MetaAd[];
+  error?: { message: string };
 }
 
-function extractImage(snapshot: FbAdSnapshot): string {
-  return (
-    snapshot.images?.[0]?.resized_image_url ||
-    snapshot.images?.[0]?.original_image_url ||
-    snapshot.cards?.[0]?.resized_image_url ||
-    snapshot.videos?.[0]?.video_preview_image_url ||
-    ''
-  );
+function daysSince(dateStr: string | undefined): number {
+  if (!dateStr) return 30;
+  const start = new Date(dateStr).getTime();
+  return Math.floor((Date.now() - start) / 86400000);
 }
 
-function extractBody(snapshot: FbAdSnapshot): string {
-  const html = snapshot.body?.markup?.__html || '';
-  return html.replace(/<[^>]*>/g, '').trim().slice(0, 200);
-}
-
-export async function fetchAdLibraryAds(brandName: string, country = 'BR'): Promise<CompetitorAd[]> {
+async function getAdSnapshotImage(snapshotUrl: string, token: string): Promise<string> {
   try {
-    const params = new URLSearchParams({
-      q: brandName,
-      count: '12',
-      active_status: 'active',
-      ad_type: 'all',
-      media_type: 'image',
-      search_type: 'keyword_unordered',
+    // Try to extract ad image from snapshot page
+    const res = await axios.get(snapshotUrl, {
+      timeout: 8000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36',
+      },
+      params: { access_token: token },
     });
-    params.append('countries[0]', country);
+    const html = res.data as string;
+    // Extract og:image or first significant img src from snapshot HTML
+    const ogMatch = html.match(/<meta[^>]+property="og:image"[^>]+content="([^"]+)"/);
+    if (ogMatch) return ogMatch[1];
+    const imgMatch = html.match(/<img[^>]+src="(https:\/\/[^"]+\.(jpg|jpeg|png|webp)[^"]*)"/i);
+    if (imgMatch) return imgMatch[1];
+    return '';
+  } catch {
+    return '';
+  }
+}
 
-    const res = await axios.get(
-      `https://www.facebook.com/ads/library/async/search_ads/?${params.toString()}`,
+export async function fetchAdLibraryByBrand(
+  brandName: string,
+  token: string,
+  country = 'BR'
+): Promise<CompetitorAd[]> {
+  try {
+    const res = await axios.get<MetaApiResponse>(
+      'https://graph.facebook.com/v21.0/ads_archive',
       {
-        timeout: 10000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/120 Safari/537.36',
-          'Accept': 'application/json, text/javascript, */*',
-          'Accept-Language': 'pt-BR,pt;q=0.9',
-          'Referer': 'https://www.facebook.com/ads/library/',
-          'X-Requested-With': 'XMLHttpRequest',
+        timeout: 15000,
+        params: {
+          search_terms: brandName,
+          ad_type: 'ALL',
+          ad_reached_countries: JSON.stringify([country]),
+          active_status: 'ACTIVE',
+          limit: 6,
+          fields: [
+            'id',
+            'page_name',
+            'ad_creative_bodies',
+            'ad_creative_link_titles',
+            'ad_delivery_start_time',
+            'ad_snapshot_url',
+          ].join(','),
+          access_token: token,
         },
       }
     );
 
-    const data = res.data as { payload?: { results?: FbAdResult[] } };
-    const results = data?.payload?.results;
-    if (!Array.isArray(results) || results.length === 0) return [];
+    const ads = res.data?.data;
+    if (!ads || ads.length === 0) return [];
 
-    return results
-      .filter((ad) => ad.snapshot && extractImage(ad.snapshot))
-      .slice(0, 6)
-      .map((ad) => ({
-        pageName: ad.page_name || brandName,
-        headline: ad.snapshot?.title || ad.snapshot?.cards?.[0]?.title || '',
-        body: extractBody(ad.snapshot!),
-        imageUrl: extractImage(ad.snapshot!),
-        cta: ad.snapshot?.cta_text || 'Saiba mais',
-        daysRunning: daysRunning(ad.start_date),
-        adLibraryUrl: `https://www.facebook.com/ads/library/?id=${ad.adid || ''}`,
-      }));
-  } catch {
+    const results = await Promise.all(
+      ads.slice(0, 4).map(async (ad): Promise<CompetitorAd> => {
+        const body = ad.ad_creative_bodies?.[0] || '';
+        const headline = ad.ad_creative_link_titles?.[0] || '';
+        const daysRunning = daysSince(ad.ad_delivery_start_time);
+
+        let imageUrl = '';
+        if (ad.ad_snapshot_url) {
+          imageUrl = await getAdSnapshotImage(ad.ad_snapshot_url, token);
+        }
+
+        return {
+          pageName: ad.page_name || brandName,
+          headline,
+          body,
+          imageUrl,
+          cta: 'Saiba mais',
+          daysRunning,
+          adLibraryUrl: ad.ad_snapshot_url || `https://www.facebook.com/ads/library/?q=${encodeURIComponent(brandName)}&active_status=active`,
+        };
+      })
+    );
+
+    return results.filter((ad) => ad.body || ad.headline);
+  } catch (err) {
+    console.error(`Ad Library error for ${brandName}:`, err instanceof Error ? err.message : err);
     return [];
   }
 }
 
-export async function fetchAllCompetitorAds(competitors: string[]): Promise<CompetitorAd[]> {
+export async function fetchAllCompetitorAds(
+  competitors: string[],
+  token: string
+): Promise<CompetitorAd[]> {
   const results = await Promise.allSettled(
-    competitors.map((name) => fetchAdLibraryAds(name))
+    competitors.map((name) => fetchAdLibraryByBrand(name, token))
   );
   return results.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
 }
