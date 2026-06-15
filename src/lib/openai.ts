@@ -3,19 +3,29 @@ import OpenAI from 'openai';
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 async function generateImage(prompt: string): Promise<string> {
-  try {
-    const response = await client.images.generate({
-      model: 'dall-e-3',
-      prompt,
-      n: 1,
-      size: '1024x1024',
-      quality: 'standard',
-    });
-    return response.data?.[0]?.url ?? '';
-  } catch (err) {
-    console.error('DALL-E error:', err instanceof Error ? err.message : err);
-    return '';
+  const models = ['gpt-image-1', 'dall-e-3', 'dall-e-2'];
+  for (const model of models) {
+    try {
+      const response = await client.images.generate({
+        model,
+        prompt: prompt.slice(0, 4000),
+        n: 1,
+        size: '1024x1024',
+      });
+      const url = response.data?.[0]?.url ?? '';
+      if (url) {
+        console.log(`[openai] Image generated with ${model}`);
+        return url;
+      }
+      // gpt-image-1 returns b64_json instead of url
+      const b64 = (response.data?.[0] as { b64_json?: string })?.b64_json;
+      if (b64) return `data:image/png;base64,${b64}`;
+    } catch (err) {
+      console.warn(`[openai] ${model} failed:`, err instanceof Error ? err.message : err);
+    }
   }
+  console.error('[openai] All image models failed');
+  return '';
 }
 
 export async function generateCompetitorAdImage(
