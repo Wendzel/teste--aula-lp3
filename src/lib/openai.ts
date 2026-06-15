@@ -1,39 +1,41 @@
 import OpenAI from 'openai';
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-export async function generateAdImage(
-  niche: string,
-  colors: string[],
-  visualStyle: string
-): Promise<string> {
-  const prompt = `Professional Facebook ad creative for ${niche} brand. Brand colors: ${colors.join(', ')}. Style: ${visualStyle}. Clean, modern design. No text overlay. Photorealistic product/lifestyle imagery.`;
-
-  const response = await client.images.generate({
-    model: 'dall-e-3',
-    prompt,
-    n: 1,
-    size: '1024x1024',
-  });
-
-  return response.data?.[0]?.url || '';
+async function generateSingleImage(prompt: string): Promise<string> {
+  try {
+    const response = await client.images.generate({
+      model: 'dall-e-3',
+      prompt: `${prompt}. No text, no words, no letters anywhere in the image. High-quality photorealistic advertising image.`,
+      n: 1,
+      size: '1024x1024',
+      quality: 'standard',
+    });
+    return response.data?.[0]?.url ?? '';
+  } catch {
+    return '';
+  }
 }
 
 export async function generateAdImages(
+  copies: Array<{ visualPrompt: string }>,
   niche: string,
-  colors: string[],
-  insights: string
+  colors: string[]
 ): Promise<string[]> {
-  const visualStyle = insights.slice(0, 200);
+  // DALL-E 3 only supports n=1 per call — run in parallel batches of 5
+  const batchSize = 5;
+  const results: string[] = [];
 
-  const imagePromises = [
-    generateAdImage(niche, colors, visualStyle),
-    generateAdImage(niche, colors, `${visualStyle} lifestyle focused`),
-    generateAdImage(niche, colors, `${visualStyle} product showcase`),
-  ];
+  for (let i = 0; i < copies.length; i += batchSize) {
+    const batch = copies.slice(i, i + batchSize);
+    const batchResults = await Promise.all(
+      batch.map((copy) => {
+        const prompt = `Professional Facebook ad creative for ${niche} brand. ${copy.visualPrompt}. Brand colors: ${colors.slice(0, 3).join(', ')}. Clean, modern advertising photography.`;
+        return generateSingleImage(prompt);
+      })
+    );
+    results.push(...batchResults);
+  }
 
-  const results = await Promise.allSettled(imagePromises);
-  return results.map((r) => (r.status === 'fulfilled' ? r.value : ''));
+  return results;
 }

@@ -1,6 +1,16 @@
+export interface CompetitorAd {
+  pageName: string;
+  headline: string;
+  body: string;
+  imageUrl: string;
+  cta: string;
+  daysRunning: number;
+  adLibraryUrl: string;
+}
+
 export interface AnalysisState {
   id: string;
-  status: 'pending' | 'scraping' | 'analyzing' | 'competitors' | 'generating' | 'done' | 'error';
+  status: 'pending' | 'scraping' | 'analyzing' | 'competitors' | 'ads' | 'generating' | 'done' | 'error';
   step: number;
   totalSteps: number;
   stepLabel: string;
@@ -15,10 +25,8 @@ export interface AnalysisState {
     tone: string;
     audience: string;
   };
-  competitors?: Array<{
-    name: string;
-    adPatterns: string;
-  }>;
+  competitorNames?: string[];
+  competitorAds?: CompetitorAd[];
   adInsights?: string;
   creatives?: Array<{
     imageUrl: string;
