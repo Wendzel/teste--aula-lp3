@@ -17,6 +17,10 @@ export interface AdCopy {
   visualPrompt: string;
 }
 
+export interface CompetitorAdData extends Omit<CompetitorAd, 'imageUrl'> {
+  visualStyle: string;
+}
+
 export async function analyzeBrand(
   title: string,
   description: string,
@@ -43,7 +47,6 @@ Formato exato:
 Os concorrentes devem ser marcas reais e conhecidas com forte presença em anúncios do Facebook.`,
     }],
   });
-
   const content = message.content[0];
   if (content.type !== 'text') throw new Error('Resposta inesperada');
   const jsonMatch = content.text.match(/\{[\s\S]*\}/);
@@ -62,46 +65,43 @@ export async function generateAdInsights(niche: string, competitors: string[]): 
 Inclua: estilo visual, uso de cores, hooks de mensagem, padrões de CTA, formatos mais eficazes. Seja específico e acionável.`,
     }],
   });
-
   const content = message.content[0];
   if (content.type !== 'text') throw new Error('Resposta inesperada');
   return content.text;
 }
 
-export async function generateFallbackAds(
+export async function generateCompetitorAdData(
   niche: string,
   competitors: string[]
-): Promise<CompetitorAd[]> {
+): Promise<CompetitorAdData[]> {
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 2048,
+    max_tokens: 3000,
     messages: [{
       role: 'user',
-      content: `Crie exemplos realistas de anúncios do Facebook para estas marcas do nicho "${niche}": ${competitors.join(', ')}.
+      content: `Crie exemplos realistas dos anúncios do Facebook de MAIOR LONGEVIDADE para estas marcas do nicho "${niche}": ${competitors.join(', ')}.
 
-Baseie-se nos anúncios reais que essas marcas costumam veicular. Retorne APENAS JSON:
+Baseie-se nos anúncios que essas marcas realmente veiculam há mais tempo (longevidade = sucesso). Crie 2 anúncios por marca.
+
+Retorne APENAS JSON array:
 [
   {
-    "pageName": "nome da página",
-    "headline": "título do anúncio",
-    "body": "texto do anúncio (até 150 chars)",
-    "cta": "texto do botão",
-    "daysRunning": número de dias em veiculação (entre 30 e 180),
-    "adLibraryUrl": "https://www.facebook.com/ads/library/?q=nome+da+marca"
+    "pageName": "Nome exato da marca",
+    "headline": "título do anúncio (até 40 chars)",
+    "body": "texto do anúncio realista (até 150 chars), com o estilo real da marca",
+    "cta": "texto do botão CTA real",
+    "daysRunning": número entre 60 e 200,
+    "adLibraryUrl": "https://www.facebook.com/ads/library/?q=nome+da+marca&active_status=active",
+    "visualStyle": "descrição em inglês do estilo visual do anúncio para DALL-E: tipo de cena, iluminação, mood, estética, sem mencionar texto"
   }
-]
-
-Crie 2 anúncios por marca (total ${competitors.length * 2} anúncios). Sem imageUrl no JSON.`,
+]`,
     }],
   });
-
   const content = message.content[0];
   if (content.type !== 'text') throw new Error('Resposta inesperada');
   const jsonMatch = content.text.match(/\[[\s\S]*\]/);
   if (!jsonMatch) return [];
-
-  const ads = JSON.parse(jsonMatch[0]) as Omit<CompetitorAd, 'imageUrl'>[];
-  return ads.map((ad) => ({ ...ad, imageUrl: '' }));
+  return JSON.parse(jsonMatch[0]) as CompetitorAdData[];
 }
 
 export async function generateAdCopies(
@@ -109,31 +109,37 @@ export async function generateAdCopies(
   tone: string,
   audience: string,
   colors: string[],
-  insights: string
+  insights: string,
+  productImages: string[]
 ): Promise<AdCopy[]> {
+  const imageContext = productImages.length > 0
+    ? `O site tem imagens de produto disponíveis. Use elementos visuais coerentes com o site nos prompts de imagem.`
+    : '';
+
   const message = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 3000,
+    max_tokens: 3500,
     messages: [{
       role: 'user',
       content: `Crie 10 variações de copy para anúncio do Facebook para marca de "${niche}" com tom ${tone} para ${audience}.
 Cores da marca: ${colors.join(', ')}
-Insights de alta performance: ${insights.slice(0, 600)}
+${imageContext}
+Insights dos anúncios de maior longevidade dos concorrentes: ${insights.slice(0, 700)}
 
-Cada variação deve ter uma abordagem diferente (urgência, benefício, prova social, curiosidade, oferta, etc).
+Cada variação deve ter abordagem diferente (urgência, benefício, prova social, curiosidade, oferta, antes/depois, pergunta, etc).
+Os prompts de imagem devem ser MUITO específicos e diferentes entre si — cenas fotográficas reais, não genéricas.
 
 Retorne APENAS JSON array com exatamente 10 itens:
 [
   {
     "headline": "título impactante em até 30 caracteres",
-    "body": "texto persuasivo em até 90 caracteres",
+    "body": "texto persuasivo em até 90 caracteres que gera desejo real",
     "cta": "chamada para ação em até 20 caracteres",
-    "visualPrompt": "descrição em inglês para DALL-E 3: cena fotográfica específica, estilo visual, mood, sem texto na imagem"
+    "visualPrompt": "descrição detalhada em inglês para DALL-E 3: cena fotográfica específica (ex: 'close-up of woman's hands holding a supplement bottle against soft morning light, marble countertop, fresh flowers in background'), estilo, mood, sem texto"
   }
 ]`,
     }],
   });
-
   const content = message.content[0];
   if (content.type !== 'text') throw new Error('Resposta inesperada');
   const jsonMatch = content.text.match(/\[[\s\S]*\]/);

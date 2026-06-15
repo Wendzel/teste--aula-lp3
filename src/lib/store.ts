@@ -21,6 +21,7 @@ export interface AnalysisState {
     colors: string[];
     fonts: string[];
     logoUrl: string;
+    productImages: string[];
     niche: string;
     tone: string;
     audience: string;
